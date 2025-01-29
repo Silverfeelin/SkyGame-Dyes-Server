@@ -188,6 +188,7 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     this.sessions.delete(ws);
+		ws.close(code, `Durable Object is closing. ${reason}`);
   }
 
   async webSocketError(ws: WebSocket, error: Error): Promise<void> {
