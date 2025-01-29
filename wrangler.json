@@ -18,8 +18,8 @@
 	"d1_databases": [
 		{
       "binding": "DB",
-      "database_name": "sky-planner",
-      "database_id": "fe8afe34-8224-4777-941f-067bea858cc1"
+      "database_name": "sky-dyes",
+      "database_id": "89becba0-4a49-4b61-8998-fe0f9fa937d7"
     }
 	],
   "durable_objects": {
