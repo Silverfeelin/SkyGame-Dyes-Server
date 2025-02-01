@@ -6,7 +6,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sky-game-dyes-server",
   "main": "src/index.ts",
-  "compatibility_date": "2025-01-24",
+  "compatibility_date": "2025-02-01",
   "migrations": [
     {
       "new_classes": [
