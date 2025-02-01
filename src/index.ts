@@ -18,27 +18,34 @@ interface ISession {
 }
 
 interface IMarker {
+	id: number;
   epoch: number;
   lat: number;
 	lng: number;
 	size: number;
 }
 
+type Marker = [number, number, number, number, number]; // [id, epoch, lat, lng, size]
+
 interface IMessage {
-	type: 'marker' | 'validation';
-	marker?: IMarker;
+	type: 'marker' | 'markers' | 'validation';
+	marker?: Marker;
+	markers?: Array<Marker>;
 	message?: string;
 }
 
 export class SkyGameDyeServer extends DurableObject<Env> {
   sessions: Map<WebSocket, ISession>;
-  markers: Array<IMarker>;
+  markers: Array<Marker>;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
     this.sessions = new Map();
     this.markers = [];
+
+    // Ping
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
 
     // Load sessions.
     this.ctx.getWebSockets().forEach(ws => {
@@ -58,12 +65,13 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 		const epoch = date.getTime();
 
     const data = await this.env.DB.prepare(`SELECT * FROM markers WHERE epoch = ?;`).bind(epoch).all();
-		this.markers = data.results.map((row): IMarker => ({
-			epoch: row.epoch as number,
-			lat: row.lat as number,
-			lng: row.lng as number,
-			size: row.size as number
-		}));
+		this.markers = data.results.map((row): Marker => [
+			row.id as number,
+			row.epoch as number,
+			row.lat as number,
+			row.lng as number,
+			row.size as number
+		]);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -137,21 +145,21 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 			return close('Session not found.');
 		}
 
-		let marker: IMarker;
+		let id = 0, epoch = 0;
+		let obj: any = {};
 
 		try {
 			// Read marker
-			const obj = JSON.parse(message.toString());
-			marker = { epoch: 0, lat: obj.lat, lng: obj.lng, size: obj.size };
-			console.log('Received marker:', marker);
+			obj = JSON.parse(message.toString());
+			console.log('Received marker:', obj);
 
 			// Validate marker
-			if (isNaN(marker.size) || marker.size < 1 || marker.size > 3) {
+			if (isNaN(obj.size) || obj.size < 1 || obj.size > 3) {
 				return close('Invalid size.');
 			}
 
 			// Validate location
-			if (isNaN(marker.lat) || isNaN(marker.lng)) {
+			if (isNaN(obj.lat) || isNaN(obj.lng)) {
 				return close('Invalid location.');
 			}
 
@@ -164,7 +172,7 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 
 			// Set epoch
 			date.setUTCMinutes(0, 0, 0);
-			marker.epoch = date.getTime();
+			epoch = date.getTime();
 
 			const query = `
 				INSERT INTO markers (userId, username, epoch, lat, lng, size)
@@ -172,9 +180,10 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 			`;
 
 			const result = await this.env.DB.prepare(query).bind(
-				session.userId, session.username, marker.epoch, marker.lat, marker.lng, marker.size
+				session.userId, session.username, epoch, obj.lat, obj.lng, obj.size
 			).run();
 			console.log('Saved to DB:', result.meta?.rows_written);
+			id = result.meta.last_row_id;
 		} catch (e) {
 			console.error(e);
 			ws.close(1008, 'Failed to parse message.');
@@ -182,6 +191,7 @@ export class SkyGameDyeServer extends DurableObject<Env> {
 			return;
 		}
 
+		const marker: Marker = [id, epoch, obj.lat, obj.lng, obj.size];
 		this.markers.push(marker);
     await this.broadcast({ type: 'marker', marker });
   }
@@ -201,9 +211,7 @@ export class SkyGameDyeServer extends DurableObject<Env> {
     this.clearOldMarkers();
 
 		console.log('Sending markers:', this.markers.length);
-    for (const marker of this.markers) {
-			this.sendMessage(ws, { type: 'marker', marker });
-    }
+		this.sendMessage(ws, { type: 'markers', markers: this.markers });
   }
 
 	/** Broadcasts a message to all sockets. */
@@ -229,7 +237,7 @@ export class SkyGameDyeServer extends DurableObject<Env> {
     date.setUTCMinutes(0, 0, 0);
     const epoch = date.getTime();
 		const length = this.markers.length;
-    this.markers = this.markers.filter(marker => marker.epoch >= epoch);
+    this.markers = this.markers.filter(marker => marker[1] >= epoch);
 		console.log('Cleared old markers:', length - this.markers.length);
   }
 }
