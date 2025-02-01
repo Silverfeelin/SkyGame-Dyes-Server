@@ -27,8 +27,23 @@ interface IMarker {
 
 type Marker = [number, number, number, number, number]; // [id, epoch, lat, lng, size]
 
+type IReceivedMarkerMessage = {
+	type: 'marker';
+	lng: number;
+	lat: number;
+	size: number;
+};
+
+type IReceivedDeleteMessage = {
+	type: 'delete';
+	id: number;
+};
+
+type IReceivedMessage = IReceivedMarkerMessage | IReceivedDeleteMessage | { type: 'unknown' };
+
 interface IMessage {
-	type: 'marker' | 'markers' | 'validation';
+	type: 'marker' | 'markers' | 'delete' | 'validation';
+	id?: number;
 	marker?: Marker;
 	markers?: Array<Marker>;
 	message?: string;
@@ -133,68 +148,103 @@ export class SkyGameDyeServer extends DurableObject<Env> {
     return id && username ? [id, username] : [undefined, undefined];
   }
 
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-		const close = (reason: string) => {
-			ws.close(1008, reason);
-			this.sessions.delete(ws);
-		};
+	/** Closes the websocket connection. */
+	async closeWebSocket(ws: WebSocket, reason: string, code = 1008): Promise<void> {
+		ws.close(code, reason);
+		this.sessions.delete(ws);
+	}
 
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
 		// Find session
     const session = this.sessions.get(ws);
     if (!session) {
-			return close('Session not found.');
+			return this.closeWebSocket(ws, 'Session not found.');
 		}
 
-		let id = 0, epoch = 0;
-		let obj: any = {};
+		let obj: IReceivedMessage | undefined;
 
 		try {
 			// Read marker
 			obj = JSON.parse(message.toString());
-			console.log('Received marker:', obj);
-
-			// Validate marker
-			if (isNaN(obj.size) || obj.size < 1 || obj.size > 3) {
-				return close('Invalid size.');
-			}
-
-			// Validate location
-			if (isNaN(obj.lat) || isNaN(obj.lng)) {
-				return close('Invalid location.');
-			}
-
-			// Validate time
-			const date = new Date();
-			if (date.getUTCMinutes() >= 55) {
-				this.sendMessage(ws, { type: 'validation', message: 'Please wait until the next hour to place a marker.' });
-				return;
-			}
-
-			// Set epoch
-			date.setUTCMinutes(0, 0, 0);
-			epoch = date.getTime();
-
-			const query = `
-				INSERT INTO markers (userId, username, epoch, lat, lng, size)
-				VALUES (?, ?, ?, ?, ?, ?);
-			`;
-
-			const result = await this.env.DB.prepare(query).bind(
-				session.userId, session.username, epoch, obj.lat, obj.lng, obj.size
-			).run();
-			console.log('Saved to DB:', result.meta?.rows_written);
-			id = result.meta.last_row_id;
+			if (!obj) { throw new Error('Null object.'); }
+			console.log('Received data:', obj);
 		} catch (e) {
 			console.error(e);
-			ws.close(1008, 'Failed to parse message.');
-			this.sessions.delete(ws);
+			return this.closeWebSocket(ws, 'Failed to parse message.');
+		}
+
+		try {
+			switch (obj.type) {
+				case 'marker':
+					await this.onMarkerMessage(ws, session, obj);
+					break;
+				case 'delete':
+					await this.onDeleteMessage(ws, session, obj);
+					break;
+				default:
+					console.error('Unknown message type:', obj.type);
+					return this.closeWebSocket(ws, 'Unknown message type.');
+			}
+		} catch (e) {
+			console.error(e);
+			return this.closeWebSocket(ws, 'Failed to process message.');
+		}
+	}
+
+	async onMarkerMessage(ws: WebSocket, session: ISession, obj: IReceivedMarkerMessage): Promise<void> {
+		// Validate marker
+		if (isNaN(obj.size) || obj.size < 1 || obj.size > 3) {
+			return this.closeWebSocket(ws, 'Invalid size.');
+		}
+
+		// Validate location
+		if (isNaN(obj.lat) || isNaN(obj.lng)) {
+			return this.closeWebSocket(ws, 'Invalid location.');
+		}
+
+		// Validate time
+		const date = new Date();
+		if (date.getUTCMinutes() >= 55) {
+			this.sendMessage(ws, { type: 'validation', message: 'Please wait until the next hour to place a marker.' });
 			return;
 		}
 
+		// Set epoch
+		date.setUTCMinutes(0, 0, 0);
+		const epoch = date.getTime();
+
+		const query = `
+			INSERT INTO markers (userId, username, epoch, lat, lng, size)
+			VALUES (?, ?, ?, ?, ?, ?);
+		`;
+
+		const result = await this.env.DB.prepare(query).bind(
+			session.userId, session.username, epoch, obj.lat, obj.lng, obj.size
+		).run();
+		console.log('Saved to DB:', result.meta?.rows_written);
+		const id = result.meta.last_row_id;
+
 		const marker: Marker = [id, epoch, obj.lat, obj.lng, obj.size];
 		this.markers.push(marker);
-    await this.broadcast({ type: 'marker', marker });
-  }
+		await this.broadcast({ type: 'marker', marker });
+	}
+
+	async onDeleteMessage(ws: WebSocket, session: ISession, obj: IMessage): Promise<void> {
+		const query = `
+			DELETE FROM markers
+			WHERE id = ? AND userId = ?;
+		`;
+
+		const result = await this.env.DB.prepare(query).bind(obj.id, session.userId).run();
+		console.log('Deleted from DB:', result.meta?.rows_written);
+
+		if (result.meta?.rows_written) {
+			this.markers = this.markers.filter(marker => marker[0] !== obj.id);
+			await this.broadcast({ type: 'delete', id: obj.id });
+		} else {
+			this.sendMessage(ws, { type: 'validation', message: 'Failed to delete. Note: you can only delete your own markers.' });
+		}
+	}
 
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
     this.sessions.delete(ws);
