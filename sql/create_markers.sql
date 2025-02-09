@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS markers (
+CREATE TABLE markers (
   [id] integer PRIMARY KEY AUTOINCREMENT,
   [createdOn] DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   [userId] char(20) NOT NULL,
@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS markers (
   [size] int NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_markers_epoch ON markers(epoch);
+CREATE INDEX idx_markers_epoch ON markers(epoch);

@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS exports (
+  [id] integer PRIMARY KEY AUTOINCREMENT,
+  [createdOn] DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  [userId] char(20) NOT NULL,
+  [username] varchar(32) NOT NULL
+);

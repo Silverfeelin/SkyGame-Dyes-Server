@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "start": "wrangler dev",
+    "dev": "wrangler dev --persist-to ./.wrangler-shared",
+    "start": "wrangler dev --persist-to ./.wrangler-shared",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
